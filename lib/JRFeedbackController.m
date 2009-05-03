@@ -152,19 +152,16 @@ NSString *JRFeedbackType[JRFeedbackController_SectionCount] = {
     }
     
     NSString *email = @"<email suppressed>";
+    NSString *name = @"<name suppressed>";
     if ([self includeEmailAddress]) {
-        if ([[nameTextField stringValue] length]) {
-            NSMutableString *name = [[[nameTextField stringValue] mutableCopy] autorelease];
-            [name replaceOccurrencesOfString:@"\"" withString:@"\\\"" options:0 range:NSMakeRange(0, [name length])];
-            email = [NSString stringWithFormat:@"\"%@\" <%@>", name, [emailAddressComboBox stringValue]];
-        } else {
-            email = [emailAddressComboBox stringValue];
-        }
+        email = [emailAddressComboBox stringValue];
+        name = [nameTextField stringValue];
     }
     NSDictionary *form = [NSDictionary dictionaryWithObjectsAndKeys:
                           JRFeedbackType[currentSection], @"feedbackType",
                           [sectionStrings[currentSection] string], @"feedback",
                           email, @"email",
+                          name, @"name",
                           [[[NSBundle bundleForClass:[self class]] infoDictionary] objectForKey:@"CFBundleName"], @"appName",
                           [[[NSBundle bundleForClass:[self class]] infoDictionary] objectForKey:@"CFBundleIdentifier"], @"bundleID",
                           [[[NSBundle bundleForClass:[self class]] infoDictionary] objectForKey:@"CFBundleVersion"], @"version",
