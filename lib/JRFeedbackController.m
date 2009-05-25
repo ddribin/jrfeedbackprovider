@@ -1,15 +1,14 @@
 /*******************************************************************************
-	JRFeedbackController.m
-		Copyright (c) 2008-2009 Jonathan 'Wolf' Rentzsch: <http://rentzsch.com>
-		Some rights reserved: <http://opensource.org/licenses/mit-license.php>
+    JRFeedbackController.m
+        Copyright (c) 2008-2009 Jonathan 'Wolf' Rentzsch: <http://rentzsch.com>
+        Some rights reserved: <http://opensource.org/licenses/mit-license.php>
 
-	***************************************************************************/
+    ***************************************************************************/
 
 #import "JRFeedbackController.h"
 #import <AddressBook/AddressBook.h>
 #import "NSURLRequest+postForm.h"
-
-// TODO Sys Config network presensce
+#import <SystemConfiguration/SCNetwork.h>
 
 JRFeedbackController *gFeedbackController = nil;
 
@@ -19,29 +18,57 @@ NSString *JRFeedbackType[JRFeedbackController_SectionCount] = {
     @"SUPPORT" // JRFeedbackController_SupportRequest
 };
 
+@interface JRFeedbackController ()
++ (NSURL*)postURL;
+@end
+
 @implementation JRFeedbackController
 
 + (void)showFeedback {
-    if (!gFeedbackController) {
-        gFeedbackController = [[JRFeedbackController alloc] init];
-    }
-    [gFeedbackController showWindow:self];
+    [self showFeedbackWithBugDetails:nil];
 }
 
 + (void)showFeedbackWithBugDetails:(NSString *)details {
-    if (!gFeedbackController) {
-        gFeedbackController = [[JRFeedbackController alloc] init];
+    SCNetworkConnectionFlags reachabilityFlags;
+    Boolean reachabilityResult = SCNetworkCheckReachabilityByName([[[JRFeedbackController postURL] host] UTF8String], &reachabilityFlags);
+    
+    //NSLog(@"reachabilityFlags: %lx", reachabilityFlags);
+    BOOL showFeedbackWindow = reachabilityResult
+        && (reachabilityFlags & kSCNetworkFlagsReachable)
+        && !(reachabilityFlags & kSCNetworkFlagsConnectionRequired)
+        && !(reachabilityFlags & kSCNetworkFlagsConnectionAutomatic)
+        && !(reachabilityFlags & kSCNetworkFlagsInterventionRequired);
+    
+    if (!showFeedbackWindow) {
+        int alertResult = [[NSAlert alertWithMessageText:@"Feedback Host Not Reachable"
+                                           defaultButton:@"Proceed Anyway"
+                                         alternateButton:@"Cancel"
+                                             otherButton:nil
+                               informativeTextWithFormat:@"You may not be able to send feedback because %@ isn't reachable.\n\nPlease ensure you have a network connection before proceeding.\n", [[JRFeedbackController postURL] host]
+                            ] runModal];
+        if (NSAlertDefaultReturn == alertResult) {
+            showFeedbackWindow = YES;
+        }
     }
-    [gFeedbackController showWindow:self];
-	// There is an assumption here that bug report is the first and default view of the window.
-	[gFeedbackController setTextViewStringTo:details];
+    
+    if (showFeedbackWindow) {
+        if (!gFeedbackController) {
+            gFeedbackController = [[JRFeedbackController alloc] init];
+        }
+        [gFeedbackController showWindow:self];
+        
+        // There is an assumption here that bug report is the first and default view of the window.
+        if (details) {
+            [gFeedbackController setTextViewStringTo:details];
+        }
+    }
 }
 
 - (id)init {
     self = [super initWithWindowNibName:@"JRFeedbackProvider"];
     if (self) {
         //[self window];
-        includeEmailAddress = YES;
+        includeContactInfo = YES;
     }
     return self;
 }
@@ -83,11 +110,11 @@ NSString *JRFeedbackType[JRFeedbackController_SectionCount] = {
     }
 }
 
-- (BOOL)includeEmailAddress {
-    return includeEmailAddress;
+- (BOOL)includeContactInfo {
+    return includeContactInfo;
 }
-- (void)setIncludeEmailAddress:(BOOL)flag {
-    includeEmailAddress = flag;
+- (void)setIncludeContactInfo:(BOOL)flag {
+    includeContactInfo = flag;
 }
 
 - (IBAction)switchSectionAction:(NSSegmentedControl*)sender {
@@ -100,7 +127,7 @@ NSString *JRFeedbackType[JRFeedbackController_SectionCount] = {
     [textView moveDown:self];
     
     if (JRFeedbackController_SupportRequest == currentSection) {
-        [self setIncludeEmailAddress:YES];
+        [self setIncludeContactInfo:YES];
     }
 }
 
@@ -112,13 +139,13 @@ NSString *JRFeedbackType[JRFeedbackController_SectionCount] = {
     [progress startAnimation:self];
     
     // if they checked not to include hardware, don't scan. Post right away.
-	if ([includeHardwareDetailsCheckbox intValue] == 1) {
-		[NSThread detachNewThreadSelector:@selector(system_profilerThread:)
-								 toTarget:self
-							   withObject:nil];
-	} else {
-		[self postFeedback:@"<systemProfile suppressed>"];
-	}
+    if ([includeHardwareDetailsCheckbox intValue] == 1) {
+        [NSThread detachNewThreadSelector:@selector(system_profilerThread:)
+                                 toTarget:self
+                               withObject:nil];
+    } else {
+        [self postFeedback:@"<systemProfile suppressed>"];
+    }
 }
 
 - (void)system_profilerThread:(id)ignored {
@@ -146,28 +173,27 @@ NSString *JRFeedbackType[JRFeedbackController_SectionCount] = {
 }
 
 - (void)postFeedback:(NSString*)systemProfile {
-    NSString *postURL = [[[NSBundle bundleForClass:[self class]] infoDictionary] objectForKey:@"JRFeedbackURL"];
-    if ([[NSUserDefaults standardUserDefaults] stringForKey:@"JRFeedbackURL"]) {
-        postURL = [[NSUserDefaults standardUserDefaults] stringForKey:@"JRFeedbackURL"];
+    
+    NSMutableDictionary *form = [NSMutableDictionary dictionaryWithObjectsAndKeys:
+                                 JRFeedbackType[currentSection], @"feedbackType",
+                                 [sectionStrings[currentSection] string], @"feedback",
+                                 [[[NSBundle bundleForClass:[self class]] infoDictionary] objectForKey:@"CFBundleName"], @"appName",
+                                 [[[NSBundle bundleForClass:[self class]] infoDictionary] objectForKey:@"CFBundleIdentifier"], @"bundleID",
+                                 [[[NSBundle bundleForClass:[self class]] infoDictionary] objectForKey:@"CFBundleVersion"], @"version",
+                                 nil];
+    if (systemProfile) {
+        [form setObject:systemProfile forKey:@"systemProfile"];
+    }
+    if ([self includeContactInfo]) {
+        if ([[emailAddressComboBox stringValue] length]) {
+            [form setObject:[emailAddressComboBox stringValue] forKey:@"email"];
+        }
+        if ([[nameTextField stringValue] length]) {
+            [form setObject:[nameTextField stringValue] forKey:@"name"];
+        }
     }
     
-    NSString *email = @"<email suppressed>";
-    NSString *name = @"<name suppressed>";
-    if ([self includeEmailAddress]) {
-        email = [emailAddressComboBox stringValue];
-        name = [nameTextField stringValue];
-    }
-    NSDictionary *form = [NSDictionary dictionaryWithObjectsAndKeys:
-                          JRFeedbackType[currentSection], @"feedbackType",
-                          [sectionStrings[currentSection] string], @"feedback",
-                          email, @"email",
-                          name, @"name",
-                          [[[NSBundle bundleForClass:[self class]] infoDictionary] objectForKey:@"CFBundleName"], @"appName",
-                          [[[NSBundle bundleForClass:[self class]] infoDictionary] objectForKey:@"CFBundleIdentifier"], @"bundleID",
-                          [[[NSBundle bundleForClass:[self class]] infoDictionary] objectForKey:@"CFBundleVersion"], @"version",
-                          systemProfile, @"systemProfile",
-                          nil];
-    NSURLRequest *request = [NSURLRequest requestWithURL:[NSURL URLWithString:postURL] postForm:form];
+    NSURLRequest *request = [NSURLRequest requestWithURL:[JRFeedbackController postURL] postForm:form];
     [NSURLConnection connectionWithRequest:request delegate:self];
 }
 
@@ -200,14 +226,18 @@ NSString *JRFeedbackType[JRFeedbackController_SectionCount] = {
 
 - (void)setTextViewStringTo:(NSString *)details
 {
-	// TODO: doing this makes all the text bold, I'm not hip to the attr string stuff done in this class
-	// so it's not easy for me to fix.
-	[textView setString:details];
+    // TODO: doing this makes all the text bold, I'm not hip to the attr string stuff done in this class
+    // so it's not easy for me to fix.
+    [textView setString:details];
+}
+
++ (NSURL*)postURL {
+    NSString *postURLString = [[[NSBundle bundleForClass:[self class]] infoDictionary] objectForKey:@"JRFeedbackURL"];
+    if ([[NSUserDefaults standardUserDefaults] stringForKey:@"JRFeedbackURL"]) {
+        postURLString = [[NSUserDefaults standardUserDefaults] stringForKey:@"JRFeedbackURL"];
+    }
+    NSAssert(postURLString, @"JRFeedbackURL not defined");
+    return [NSURL URLWithString:postURLString];
 }
 
 @end
-
-#if 0
-#import <SystemConfiguration/SCNetwork.h>
-SCNetworkCheckReachabilityByName
-#endif
